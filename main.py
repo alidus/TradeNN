@@ -6,14 +6,6 @@ import matplotlib.ticker as ticker
 import torch.functional as F
 from torch.autograd import Variable
 
-n_epochs = 20
-input_size = 1
-hidden_size = 100
-batch_size = 4
-n_regions = 5
-total_length = 200
-steps_in_region = total_length // n_regions
-seq_len = steps_in_region // batch_size
 
 def load_json_data():
     with open("ratesLearn.json") as f:
@@ -68,73 +60,119 @@ def normalize_array(array):
 def convert_cuda_tesor_to_1dim_ndarray(tensor):
     return tensor.cpu().numpy().reshape(total_length)
 
-
-def train_model(model, n_epochs, input, target):
+def train_model(model, n_epochs, input_size, hidden_size, seq_len, batch_size, trainX, trainY):
     predict = []
-    criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
-    model.cuda().double()
     for epoch in range(n_epochs):
-        for timestep in range(len(input) - 1):
+        for timestep in range(len(trainX) - 1):
             model.zero_grad()
             model.hidden = model.init_hidden()
             model.cell = model.init_hidden()
-            predict = model(input)
-            losses = criterion(predict, target)
+            predict = model(trainX)
+            losses = criterion(predict, trainY)
             losses.backward()
             optimizer.step()
         print("EPOCH: " + str(epoch))
 
-
-def give_prediction(model, prediction_length, starting_x):
-    predictions = []
-    predict = starting_x
+def give_prediction(model, input):
     with torch.no_grad():
-        for timestep in range(prediction_length - 1):
-            model.hidden = model.init_hidden()
-            model.cell = model.init_hidden()
-            predict = model(predict)
-            predictions.append(predict)
-            # losses = criterion(predict, trainY)
-            # losses.backward()
-        return predictions
+        prediction = model(input)
+        return prediction
+
+def ndarray_to_tensor(ndarray):
+    return torch.from_numpy(np.reshape(ndarray, (seq_len, batch_size, 1))).cuda()
+
+def one_point_prediction(model):
+    fig = plt.figure(figsize=(10, 5))
+    ax1 = plt.subplot2grid((40, 40), (0, 0), rowspan=40, colspan=40)
+
+    ax1.plot(timesteps[0:total_length], convert_cuda_tesor_to_1dim_ndarray(trainY), color="grey",
+             label="original rates 1")
+    result = give_prediction(model, trainX)
+    ax1.plot(timesteps[0:total_length], convert_cuda_tesor_to_1dim_ndarray(result.detach()), color="blue",
+             label="prediction 1")
+
+    ax1.xaxis.set_major_locator(ticker.MultipleLocator(10))
+    plt.xticks(rotation=45)
+    plt.subplots_adjust(bottom=.20)
+    plt.show()
+
+def seq_prediction(model, seqence_length):
+    fig = plt.figure(figsize=(10, 5))
+    ax1 = plt.subplot2grid((40, 40), (0, 0), rowspan=40, colspan=40)
+
+    fig = plt.figure(figsize=(10, 5))
+    ax1 = plt.subplot2grid((40, 40), (0, 0), rowspan=40, colspan=40)
+    ax1.plot(timesteps[:len(json_data_array[0])], json_data_array[0][:len(json_data_array[0])], color="grey",
+             label="original rates 1")
+    first_half_pred = give_prediction(model, trainX)
+    ax1.plot(timesteps[:len(json_data_array[0]) // 2], convert_cuda_tesor_to_1dim_ndarray(first_half_pred.detach()), color="blue",
+             label="prediction 1")
 
 
-def prepare_tensors(array_of_inputs, sequence_length = seq_len):
-    teX, teY = prepare_dataset(array_of_inputs)
-    teX = torch.from_numpy(np.reshape(teX, (sequence_length, batch_size, 1))).cuda()
-    teY = torch.from_numpy(np.reshape(teY, (sequence_length, batch_size, 1))).cuda()
-    return teX, teY
+    current_timestep = total_length
+    temp_predictions = convert_cuda_tesor_to_1dim_ndarray(give_prediction(model, trainX))
+    predictions = temp_predictions[:].tolist()
+    while current_timestep < len(json_data_array[0]):
+        for i in range(seqence_length):
+            predicted_value = convert_cuda_tesor_to_1dim_ndarray(give_prediction(model, ndarray_to_tensor(temp_predictions)))[-1]
+            temp_predictions = temp_predictions[1:]
+            temp_predictions = np.append(temp_predictions, predicted_value)
+            predictions.append(predicted_value)
+            current_timestep += 1
+        temp_timesteps = timesteps[current_timestep - seqence_length:current_timestep]
+        ax1.plot(temp_timesteps, predictions[current_timestep - len(temp_timesteps):current_timestep], color="red",
+                 label="predicted")
+        temp_predictions = prepare_dataset(json_data_array[0][(current_timestep - total_length):current_timestep])[0]
+        pass
 
 
 
+
+
+    ax1.xaxis.set_major_locator(ticker.MultipleLocator(10))
+    plt.xticks(rotation=45)
+    plt.subplots_adjust(bottom=.20)
+    plt.show()
+
+    return predictions
+
+
+
+n_epochs = 100
+input_size = 1
+hidden_size = 100
+seq_len = 32
+batch_size = 4
+total_length = seq_len * batch_size
 
 json_data_array = load_json_data()
 timesteps = json_data_array[1]
+trainX, trainY = prepare_dataset(json_data_array[0][0:total_length])
 
-testX, testY = prepare_tensors(json_data_array[0][:total_length], total_length // batch_size)
-fig = plt.figure(figsize=(10, 5))
-ax1 = plt.subplot2grid((40, 40), (0, 0), rowspan=40, colspan=40)
-# Построить график оригинальных цен
-ax1.plot(timesteps[0:200], convert_cuda_tesor_to_1dim_ndarray(testY), color="grey", label="original rates")
+trainX = ndarray_to_tensor(trainX)
+
+trainY = ndarray_to_tensor(trainY)
+
+trainX = trainX.cuda()
+trainY = trainY.cuda()
 
 model = LSTMNet(input_size, hidden_size, seq_len, batch_size)
+model.double()
+model.cuda()
+criterion = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
 
 
-# Основной цикл
-for i in range(n_regions):
-    subseq = json_data_array[0][i * steps_in_region : (i+1) * steps_in_region]
-    testX, testY = prepare_tensors(subseq)
-    train_model(model, n_epochs, testX, testY)
-    result = give_prediction(model, steps_in_region, json_data_array[0][(i+1) * steps_in_region])
+
+train_model(model, n_epochs, input_size, hidden_size, seq_len, batch_size, trainX, trainY)
+
+#one_point_prediction(model)
+seq_prediction(model, 20)
 
 
-ax1.plot(timesteps[0:100], convert_cuda_tesor_to_1dim_ndarray(predict.detach()), color="blue", label="prediction")
 
-ax1.xaxis.set_major_locator(ticker.MultipleLocator(10))
-plt.xticks(rotation=45)
-plt.subplots_adjust(bottom=.20)
-plt.show()
+
+
 
 #
 # if torch.cuda.is_available():
@@ -144,5 +182,3 @@ plt.show()
 # else:
 #     x = torch.zeros(3, 5)
 #     print(x)
-
-
